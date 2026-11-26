@@ -24,7 +24,7 @@ sh scripts/snapshot.sh /path/to/production.db /path/to/snapshot.db
 # 或省略第二参数，使用 VIZ_SNAPSHOT 或默认路径
 ```
 
-脚本用 `sqlite3 -readonly` 对源库执行 `VACUUM INTO` 写入目标目录临时文件，再原子 `mv` 覆盖快照。同一快照文件的修改时间距今不足 10 分钟时跳过，锁目录防止并发。源与目标必须不同。发生错误时保留旧快照；若异常中断残留 `snapshot.db.lock`，确认无其他快照进程后再删除锁目录。生产库、快照、日志与环境变量文件均不应提交。
+脚本以 `umask 077` 限制新快照权限，用 `sqlite3 -readonly` 对源库执行 `VACUUM INTO` 写入目标目录临时文件，再原子 `mv` 覆盖快照。同一快照文件的修改时间距今不足 10 分钟时跳过，锁目录防止并发。源与目标必须不同。发生错误时保留旧快照；若异常中断残留 `snapshot.db.lock`，确认无其他快照进程后再删除锁目录。生产库、快照、日志与环境变量文件均不应提交。
 
 ## 测试与虚构数据
 
@@ -76,10 +76,10 @@ tailscale serve --bg --https=443 http://127.0.0.1:50090
 
 - `/api/status`：`available`, `snapshot_mtime`。
 - `/api/today?date=YYYY-MM-DD`：`available`, `date`, `token`（`at`, `input_tokens`, `cache_hit_tokens`）, `compact_floor`, `counts`（`action`, `count`）, `backfill_cursor`, `backfill_day`（`date`, `count`）, `latest`（`id`, `kind`, `trigger`, `status`, `started_at`, `finished_at`）, `reminders`。日期可省略，默认上海当天。
-- `/api/events?date=YYYY-MM-DD&action=ADD`：`events`，每项 `id`, `at`, `action`, `table_name`, `row_id`, `actor`, `reason`, `statement`, `sensitive`；日期及动作可省略。私密关联事件的 reason 脱敏。
+- `/api/events?date=YYYY-MM-DD&action=ADD`：`events`，每项 `id`, `at`, `action`, `table_name`, `row_id`, `actor`, `reason`, `statement`, `sensitive`；日期及动作可省略。私密关联事件及找不到关联事实或情景的事件，其 reason 脱敏。
 - `/api/timeline`：`consolidations`（`id`, `scope`, `kind`, `trigger`, `status`, `upto_seq`, `started_at`, `finished_at`）, `watermark`, `backfill_cursor`。
 - `/api/consolidations/:id/episodes`：`episodes`，普通或敏感记录含 `id`, `status`, `started_at`, `ended_at`, `created_at`, `title`, `summary`, `sensitive`；私密记录只含 ID、状态、时间及脱敏文本。
-- `/api/facts?scope=&kind=&source_kind=&salience=&status=active&q=&page=1`：`facts`, `page`, `page_size`, `total`。普通或敏感事实含 `id`, `scope`, `kind`, `statement`, `source_kind`, `salience`, `status`, `observed_at`, `last_reinforced_at`, `used_count`, `created_at`, `updated_at`, `sensitive`；私密事实只含 ID、状态、时间及脱敏文本。`status=all` 包含所有状态；关键字按字面 LIKE 匹配并排除私密事实。
+- `/api/facts?scope=&kind=&source_kind=&salience=&status=active&q=&page=1`：`facts`, `page`, `page_size`, `total`。普通或敏感事实含 `id`, `scope`, `kind`, `statement`, `source_kind`, `salience`, `status`, `observed_at`, `last_reinforced_at`, `used_count`, `created_at`, `updated_at`, `sensitive`；私密事实只含 ID、状态、时间及脱敏文本。`status=all` 包含所有状态；关键字按字面 LIKE 匹配；按范围、类型、来源、显著性或关键字筛选时排除私密事实，避免通过筛选结果推断其隐藏属性。
 - `/api/facts/:id/events`：`events`，字段同 `/api/events`，按时间升序。
 
 所有时间戳均为 Unix 秒，`token.at` 为 Unix 毫秒，`snapshot_mtime` 为 ISO 时间。不存在快照时 API 返回 `available: false`, `message`, `snapshot_mtime: null`。非 GET 一律返回 405。

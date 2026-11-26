@@ -5,11 +5,25 @@ import { fileURLToPath } from 'node:url';
 
 const html = readFileSync(new URL('./public/index.html', import.meta.url));
 const PRIVATE = '（私密）';
+const shanghaiOffset = new Intl.DateTimeFormat('en-US', {timeZone:'Asia/Shanghai', timeZoneName:'longOffset'});
+function localMidnight(utcMidnight) {
+  let result = utcMidnight;
+  for (let i = 0; i < 4; i++) {
+    const zone = shanghaiOffset.formatToParts(new Date(result)).find(p => p.type === 'timeZoneName')?.value;
+    const match = zone?.match(/^GMT([+-])(\d{2}):(\d{2})(?:\x3a(\d{2}))?$/);
+    if (!match) throw new Error('Unsupported Shanghai offset');
+    const seconds = (Number(match[2])*3600 + Number(match[3])*60 + Number(match[4] || 0)) * (match[1] === '+' ? 1 : -1);
+    const next = utcMidnight - seconds * 1000;
+    if (next === result) break;
+    result = next;
+  }
+  return result / 1000;
+}
 export function shanghaiDayBounds(date) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Invalid date');
-  const start = Date.parse(`${date}T00:00:00+08:00`);
-  if (!Number.isFinite(start) || new Date(start + 8 * 3600000).toISOString().slice(0,10) !== date) throw new Error('Invalid date');
-  return [start / 1000, start / 1000 + 86400];
+  const utc = Date.parse(`${date}T00:00:00Z`);
+  if (!Number.isFinite(utc) || new Date(utc).toISOString().slice(0,10) !== date) throw new Error('Invalid date');
+  return [localMidnight(utc), localMidnight(utc + 86400000)];
 }
 function today() { return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()); }
 function meta(db, key) { return db.prepare('SELECT value FROM schema_meta WHERE key = ?').get(key)?.value ?? null; }
@@ -27,11 +41,11 @@ function episode(row) {
 }
 const factColumns = 'id, scope, kind, statement, source_kind, salience, privacy, status, observed_at, last_reinforced_at, used_count, created_at, updated_at';
 const eventColumns = `e.id, e.at, e.action, e.table_name, e.row_id, e.actor,
- CASE WHEN f.privacy = ? OR ep.privacy = ? THEN ? ELSE e.reason END AS reason,
+ CASE WHEN f.privacy = ? OR ep.privacy = ? OR (e.table_name = ? AND f.id IS NULL) OR (e.table_name = ? AND ep.id IS NULL) THEN ? ELSE e.reason END AS reason,
  CASE WHEN e.table_name = ? AND f.privacy = ? THEN ? WHEN e.table_name = ? THEN f.statement ELSE NULL END AS statement,
  CASE WHEN f.privacy = ? OR ep.privacy = ? THEN 1 ELSE 0 END AS sensitive`;
 const eventJoins = ' FROM memory_events e LEFT JOIN facts f ON e.table_name = ? AND e.row_id = f.id LEFT JOIN episodes ep ON e.table_name = ? AND e.row_id = ep.id';
-const eventArgs = ['secret','secret',PRIVATE,'facts','secret',PRIVATE,'facts','sensitive','sensitive','facts','episodes'];
+const eventArgs = ['secret','secret','facts','episodes',PRIVATE,'facts','secret',PRIVATE,'facts','sensitive','sensitive','facts','episodes'];
 function events(db, where, params) { return db.prepare(`SELECT ${eventColumns}${eventJoins} WHERE ${where} ORDER BY e.at ASC, e.id ASC`).all(...eventArgs,...params).map(r=>({...r,sensitive:!!r.sensitive})); }
 function json(res,status,data) { res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data)); }
 function pageNum(v) { const n=Number(v ?? 1); if (!Number.isSafeInteger(n) || n<1 || n>1000000) throw new Error('Invalid page'); return n; }
@@ -64,7 +78,8 @@ export function createApp({snapshot = process.env.VIZ_SNAPSHOT || './data/snapsh
       if (match) { const rows=db.prepare('SELECT id, status, started_at, ended_at, created_at, title, summary, privacy FROM episodes WHERE consolidation_id = ? ORDER BY started_at ASC, id ASC').all(decodeURIComponent(match[1])); return json(res,200,{episodes:rows.map(episode)}); }
       if (url.pathname === '/api/facts') {
         const conditions=[],args=[];
-        for (const key of ['scope','kind','source_kind','salience']) { let val=url.searchParams.get(key); if (val) {conditions.push(`${key} = ?`); args.push(val);} }
+        for (const key of ['scope','kind','source_kind','salience']) { const val=url.searchParams.get(key); if (val) {conditions.push(`${key} = ?`); args.push(val);} }
+        if (args.length) { conditions.push('privacy <> ?'); args.push('secret'); }
         const status=url.searchParams.get('status') ?? 'active'; if (status && status !== 'all') {conditions.push('status = ?');args.push(status);}
         const q=url.searchParams.get('q'); if (q) {conditions.push("privacy <> ? AND statement LIKE ? ESCAPE '\\'"); args.push('secret',`%${q.replace(/[\\%_]/g,'\\$&')}%`);}
         const where=conditions.length?' WHERE '+conditions.join(' AND '):''; const page=pageNum(url.searchParams.get('page')); const total=db.prepare(`SELECT COUNT(id) AS count FROM facts${where}`).get(...args).count;
