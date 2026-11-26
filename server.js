@@ -62,11 +62,11 @@ export function createApp({snapshot = process.env.VIZ_SNAPSHOT || './data/snapsh
       db = new DatabaseSync(snapshot,{readOnly:true});
       if (url.pathname === '/api/today') {
         const date=url.searchParams.get('date') || today(); const [start,end]=shanghaiDayBounds(date);
-        const token=db.prepare('SELECT at, input_tokens, cache_hit_tokens FROM token_usage WHERE source = ? ORDER BY at DESC, id DESC LIMIT ?').get('main',1) ?? null;
+        const todayMainUsage=db.prepare('SELECT SUM(input_tokens) AS total FROM token_usage WHERE source = ? AND day_key = ?').get('main',date).total ?? 0;
         const counts=db.prepare('SELECT action, COUNT(id) AS count FROM memory_events WHERE at >= ? AND at < ? GROUP BY action ORDER BY action').all(start,end);
         const latest=db.prepare('SELECT id, kind, trigger, status, started_at, finished_at FROM consolidations ORDER BY started_at DESC, id DESC LIMIT ?').get(1) ?? null;
         const reminders=db.prepare('SELECT COUNT(id) AS count FROM reminders WHERE status IN (?,?,?)').get('pending','snoozed','delivering').count;
-        return json(res,200,{available:true,date,token,compact_floor:numberOrNull(meta(db,'compact_floor:main')),counts,backfill_cursor:numberOrNull(meta(db,'compact_backfill:cursor:main')),backfill_day:dayMeta(db),latest,reminders});
+        return json(res,200,{available:true,date,today_main_usage:todayMainUsage,compact_floor:numberOrNull(meta(db,'compact_floor:main')),counts,backfill_cursor:numberOrNull(meta(db,'compact_backfill:cursor:main')),backfill_day:dayMeta(db),latest,reminders});
       }
       if (url.pathname === '/api/events') { const [start,end]=shanghaiDayBounds(url.searchParams.get('date')||today()); const action=url.searchParams.get('action'); return json(res,200,{events:events(db,`e.at >= ? AND e.at < ?${action ? ' AND e.action = ?' : ''}`,action?[start,end,action]:[start,end])}); }
       if (url.pathname === '/api/timeline') {

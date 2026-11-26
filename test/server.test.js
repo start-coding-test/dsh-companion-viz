@@ -1,6 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -25,3 +26,43 @@ test('historical Shanghai DST boundaries use the zone rather than a fixed offset
 test('filters do not reveal hidden secret metadata',async()=>{for(const query of ['scope=main','kind=identity','source_kind=user_explicit','salience=normal','q=SECRET'])assert.ok(!(await get('/api/facts?'+query)).facts.some(f=>f.id==='f3'))});
 
 test('orphaned event reasons are redacted rather than exposing unknown privacy',async()=>{const p=join(dir,'orphan.db');makeFixture(p,Date.parse('2026-01-02T04:00:00Z')/1000);const db=new DatabaseSync(p);db.prepare('INSERT INTO memory_events (at,action,table_name,row_id,actor,reason) VALUES (?,?,?,?,?,?)').run(1767326400,'UPDATE','facts','missing','user','ORPHAN_PRIVATE_REASON_X');db.close();const s=createApp({snapshot:p});await new Promise(r=>s.listen(0,'127.0.0.1',r));try{const response=await fetch(`http://127.0.0.1:${s.address().port}/api/facts/missing/events`);const body=await response.text();assert.ok(!body.includes('ORPHAN_PRIVATE_REASON_X'));assert.equal(JSON.parse(body).events[0].reason,'（私密）')}finally{await new Promise(r=>s.close(r))}});
+
+async function renderTodayAt(baseUrl, date) {
+  const app={innerHTML:'',querySelectorAll:()=>[]},notice={innerHTML:''},snapshot={textContent:''};
+  const document={getElementById:id=>({app,notice,snapshot}[id]),querySelectorAll:()=>[]};
+  const html=readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
+  const script=html.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/render\(\);\s*$/, 'globalThis.renderPromise=render();');
+  const context={document,fetch:url=>fetch(baseUrl+url+(date && url==='/api/today' ? '?date='+date : '')),URLSearchParams,FormData,console};
+  runInNewContext(script,context); await context.renderPromise; return {app,notice,snapshot};
+}
+test('today reports compact floor and day-key main input sum, not latest token row',async()=>{
+  const first=await get('/api/today?date=2026-01-01'),second=await get('/api/today?date=2026-01-02'),empty=await get('/api/today?date=2026-01-03');
+  assert.equal(first.compact_floor,240000);assert.equal(second.compact_floor,240000);
+  assert.equal(first.today_main_usage,70);assert.equal(second.today_main_usage,375);assert.equal(empty.today_main_usage,0);
+  assert.ok(!Object.hasOwn(second,'token'));
+});
+test('default today uses Shanghai day key regardless of process timezone',async()=>{
+  const d=await get('/api/today');
+  const key=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  assert.equal(d.date,key);
+  assert.equal(d.today_main_usage,key==='2026-01-01'?70:key==='2026-01-02'?375:0);
+});
+test('today page shows floor and daily usage and no duplicate marker',async()=>{
+  const rendered=await renderTodayAt(base,'2026-01-02');
+  assert.equal(rendered.notice.innerHTML,'');assert.match(rendered.app.innerHTML,/最近一次压缩后的上下文/);
+  assert.match(rendered.app.innerHTML,/240,000/);assert.match(rendered.app.innerHTML,/aria-valuenow="240000"/);
+  assert.match(rendered.app.innerHTML,/今日主会话用量<\/span><span>375 tokens/);assert.doesNotMatch(rendered.app.innerHTML,/压缩水位|class="marker"|最新 main 请求/);
+});
+test('missing compact floor returns null and page renders 暂无',async()=>{
+  const p=join(dir,'no-floor.db');makeFixture(p,Date.parse('2026-01-02T04:00:00Z')/1000);
+  const db=new DatabaseSync(p);db.prepare('DELETE FROM schema_meta WHERE key = ?').run('compact_floor:main');db.close();
+  const s=createApp({snapshot:p});await new Promise(r=>s.listen(0,'127.0.0.1',r));
+  try {const b=`http://127.0.0.1:${s.address().port}`;const r=await fetch(b+'/api/today?date=2026-01-02');const data=await r.json();assert.equal(data.compact_floor,null);assert.equal(data.today_main_usage,375);
+    const rendered=await renderTodayAt(b,'2026-01-02');assert.equal(rendered.notice.innerHTML,'');assert.match(rendered.app.innerHTML,/暂无/);assert.match(rendered.app.innerHTML,/今日主会话用量/);assert.doesNotMatch(rendered.app.innerHTML,/aria-valuenow/);
+  } finally {await new Promise(r=>s.close(r))}
+});
+
+test('zero compact floor is shown as zero rather than missing',async()=>{
+  const p=join(dir,'zero-floor.db');makeFixture(p,Date.parse('2026-01-02T04:00:00Z')/1000);const db=new DatabaseSync(p);db.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run('0','compact_floor:main');db.close();
+  const s=createApp({snapshot:p});await new Promise(r=>s.listen(0,'127.0.0.1',r));try{const b=`http://127.0.0.1:${s.address().port}`;const d=await (await fetch(b+'/api/today')).json();assert.equal(d.compact_floor,0);const ui=await renderTodayAt(b);assert.match(ui.app.innerHTML,/aria-valuenow="0"/);assert.doesNotMatch(ui.app.innerHTML,/暂无/)}finally{await new Promise(r=>s.close(r))}
+});

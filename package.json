@@ -1,1 +1,1 @@
-{"name":"dsh-companion-viz","version":"0.1.0","private":true,"type":"module","engines":{"node":">=24 <25"},"scripts":{"start":"node server.js","test":"node --test","fixture":"node scripts/make-fixture.js"}}
+{"name":"dsh-companion-viz","version":"0.1.1","private":true,"type":"module","engines":{"node":">=24 <25"},"scripts":{"start":"node server.js","test":"node --test","fixture":"node scripts/make-fixture.js"}}
