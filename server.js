@@ -25,7 +25,7 @@ export function shanghaiDayBounds(date) {
   if (!Number.isFinite(utc) || new Date(utc).toISOString().slice(0,10) !== date) throw new Error('Invalid date');
   return [localMidnight(utc), localMidnight(utc + 86400000)];
 }
-function today() { return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()); }
+function today(now = new Date()) { return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(now); }
 function meta(db, key) { return db.prepare('SELECT value FROM schema_meta WHERE key = ?').get(key)?.value ?? null; }
 function numberOrNull(x) { if (x === null || String(x).trim() === '') return null; const n = Number(x); return Number.isFinite(n) ? n : null; }
 function dayMeta(db) { try { const j=JSON.parse(meta(db,'compact_backfill:day:main')); return j && typeof j === 'object' ? {date: typeof j.date === 'string' ? j.date : null, count: numberOrNull(j.count)} : null; } catch { return null; } }
@@ -49,7 +49,7 @@ const eventArgs = ['secret','secret','facts','episodes',PRIVATE,'facts','secret'
 function events(db, where, params) { return db.prepare(`SELECT ${eventColumns}${eventJoins} WHERE ${where} ORDER BY e.at ASC, e.id ASC`).all(...eventArgs,...params).map(r=>({...r,sensitive:!!r.sensitive})); }
 function json(res,status,data) { res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data)); }
 function pageNum(v) { const n=Number(v ?? 1); if (!Number.isSafeInteger(n) || n<1 || n>1000000) throw new Error('Invalid page'); return n; }
-export function createApp({snapshot = process.env.VIZ_SNAPSHOT || './data/snapshot.db'} = {}) {
+export function createApp({snapshot = process.env.VIZ_SNAPSHOT || './data/snapshot.db', clock = () => new Date()} = {}) {
   return createServer((req,res) => {
     if (req.method !== 'GET') { res.setHeader('Allow','GET'); return json(res,405,{error:'Only GET is supported'}); }
     const url = new URL(req.url,'http://localhost');
@@ -67,6 +67,17 @@ export function createApp({snapshot = process.env.VIZ_SNAPSHOT || './data/snapsh
         const latest=db.prepare('SELECT id, kind, trigger, status, started_at, finished_at FROM consolidations ORDER BY started_at DESC, id DESC LIMIT ?').get(1) ?? null;
         const reminders=db.prepare('SELECT COUNT(id) AS count FROM reminders WHERE status IN (?,?,?)').get('pending','snoozed','delivering').count;
         return json(res,200,{available:true,date,today_main_usage:todayMainUsage,compact_floor:numberOrNull(meta(db,'compact_floor:main')),counts,backfill_cursor:numberOrNull(meta(db,'compact_backfill:cursor:main')),backfill_day:dayMeta(db),latest,reminders});
+      }
+      if (url.pathname === '/api/week') {
+        const last = today(clock());
+        const midnight = Date.parse(`${last}T00:00:00Z`);
+        const query = db.prepare('SELECT action, COUNT(action) AS count FROM memory_events WHERE at >= ? AND at < ? GROUP BY action');
+        const days = Array.from({length:7}, (_, i) => {
+          const date = new Date(midnight - (6-i)*86400000).toISOString().slice(0,10);
+          const [start, end] = shanghaiDayBounds(date);
+          return {date, counts:Object.fromEntries(query.all(start,end).map(row => [row.action,row.count]))};
+        });
+        return json(res,200,{days});
       }
       if (url.pathname === '/api/events') { const [start,end]=shanghaiDayBounds(url.searchParams.get('date')||today()); const action=url.searchParams.get('action'); return json(res,200,{events:events(db,`e.at >= ? AND e.at < ?${action ? ' AND e.action = ?' : ''}`,action?[start,end,action]:[start,end])}); }
       if (url.pathname === '/api/timeline') {

@@ -76,6 +76,7 @@ tailscale serve --bg --https=443 http://127.0.0.1:50090
 
 - `/api/status`：`available`, `snapshot_mtime`。
 - `/api/today?date=YYYY-MM-DD`：`available`, `date`, `today_main_usage`（上海当天 `source=main` 的 `input_tokens` 之和，无记录时为 0）, `compact_floor`（最近一次压缩后的实测上下文 tokens；缺失为 null）, `counts`（`action`, `count`）, `backfill_cursor`, `backfill_day`（`date`, `count`）, `latest`（`id`, `kind`, `trigger`, `status`, `started_at`, `finished_at`）, `reminders`。日期可省略，默认上海当天。
+- `/api/week`：`days`（最近七个上海自然日，每项 `date`, `counts`；只返回动作计数，不含事件文本）。
 - `/api/events?date=YYYY-MM-DD&action=ADD`：`events`，每项 `id`, `at`, `action`, `table_name`, `row_id`, `actor`, `reason`, `statement`, `sensitive`；日期及动作可省略。私密关联事件及找不到关联事实或情景的事件，其 reason 脱敏。
 - `/api/timeline`：`consolidations`（`id`, `scope`, `kind`, `trigger`, `status`, `upto_seq`, `started_at`, `finished_at`）, `watermark`, `backfill_cursor`。
 - `/api/consolidations/:id/episodes`：`episodes`，普通或敏感记录含 `id`, `status`, `started_at`, `ended_at`, `created_at`, `title`, `summary`, `sensitive`；私密记录只含 ID、状态、时间及脱敏文本。
