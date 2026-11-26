@@ -11,7 +11,14 @@ export function makeFixture(path, now = Math.floor(Date.now() / 1000)) {
   db.exec(readFileSync(new URL('./schema-v0.7.20.sql', import.meta.url), 'utf8'));
   const insert = (sql, ...args) => db.prepare(sql).run(...args);
   for (const [key, value] of [['compact_floor:main','240000'],['compact_backfill:cursor:main','125'],['compact_backfill:day:main',JSON.stringify({date:'2026-11-26',count:3})]]) insert('INSERT INTO schema_meta (key,value) VALUES (?,?)', key, value);
-  insert('INSERT INTO token_usage (at,day_key,source,input_tokens,cache_hit_tokens) VALUES (?,?,?,?,?)', now*1000, '2026-11-26','main',220000,120000);
+  const fixtureDay = new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now * 1000));
+  for (const row of [
+    [Date.parse('2026-01-01T15:59:00Z'), '2026-01-01', 'main', 70, 1000],
+    [Date.parse('2026-01-01T16:01:00Z'), '2026-01-02', 'main', 120, 2000],
+    [Date.parse('2026-01-01T16:02:00Z'), '2026-01-02', 'main', 240, 3000],
+    [Date.parse('2026-01-01T16:03:00Z'), '2026-01-02', 'task', 9000, 4000],
+    [now * 1000, fixtureDay, 'main', 15, 5000],
+  ]) insert('INSERT INTO token_usage (at,day_key,source,input_tokens,cache_hit_tokens) VALUES (?,?,?,?,?)', ...row);
   for (const r of [
     ['c1','nap','scheduled',100,'written',now-4200,now-4154],
     ['c2','deep','backfill',125,'compacted',now-2400,now-2311],
